@@ -1,11 +1,17 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/widgets/confirm_dialog.dart';
 import '../../../core/widgets/empty_state.dart';
 import '../data/models/project.dart';
 import '../logic/projects_controller.dart';
+import '../logic/steps_controller.dart';
 import 'project_detail_screen.dart';
+import 'package:process_cards/features/projects/ui/settings_screen.dart';
+
 
 enum _SortMode { updatedDesc, titleAsc, createdAsc }
 
@@ -37,17 +43,31 @@ class _ProjectsListScreenState extends ConsumerState<ProjectsListScreen> {
         appBar: AppBar(
           title: const Text('Projects'),
           actions: [
+            IconButton(
+              tooltip: 'Settings',
+              icon: const Icon(Icons.settings_outlined),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => SettingsScreen()),
+                );
+              },
+            ),
             _SortButton(
               mode: _sortMode,
               onChanged: (m) => setState(() => _sortMode = m),
             ),
           ],
         ),
+
         floatingActionButton: FloatingActionButton.extended(
           onPressed: () async {
             final title = await _promptText(context, 'New project', '');
             if (title == null) return;
-            final p = await ref.read(projectsControllerProvider.notifier).createProject(title);
+
+            final p =
+                await ref.read(projectsControllerProvider.notifier).createProject(title);
+
             if (!context.mounted) return;
             Navigator.push(
               context,
@@ -57,22 +77,30 @@ class _ProjectsListScreenState extends ConsumerState<ProjectsListScreen> {
           icon: const Icon(Icons.add),
           label: const Text('New'),
         ),
+
         body: projectsAsync.when(
           data: (projects) {
             final filtered = _applySearchAndSort(projects);
 
             if (projects.isEmpty) {
-              return const EmptyState(
+              return EmptyState(
                 title: 'No projects yet',
-                subtitle: 'Tap “New” to create your first process.',
+                subtitle: 'Tap “New” to create one, or “Import” to build from photos.',
                 icon: Icons.view_agenda_outlined,
+                action: FilledButton.icon(
+                  onPressed: () => _importProjectFromPhotos(context),
+                  icon: const Icon(Icons.file_upload_outlined),
+                  label: const Text('Import photos'),
+                ),
               );
             }
 
             return Column(
               children: [
-                // Top summary / header
-                _HeaderSummary(projects: projects),
+                _HeaderSummary(
+                  projects: projects,
+                  onImport: () => _importProjectFromPhotos(context),
+                ),
 
                 // Search bar
                 Padding(
@@ -113,22 +141,30 @@ class _ProjectsListScreenState extends ConsumerState<ProjectsListScreen> {
                               onOpen: () {
                                 Navigator.push(
                                   context,
-                                  MaterialPageRoute(builder: (_) => ProjectDetailScreen(project: p)),
+                                  MaterialPageRoute(
+                                    builder: (_) => ProjectDetailScreen(project: p),
+                                  ),
                                 );
                               },
                               onRename: () async {
-                                final name = await _promptText(context, 'Rename project', p.title);
+                                final name =
+                                    await _promptText(context, 'Rename project', p.title);
                                 if (name == null) return;
-                                await ref.read(projectsControllerProvider.notifier).renameProject(p, name);
+                                await ref
+                                    .read(projectsControllerProvider.notifier)
+                                    .renameProject(p, name);
                               },
                               onDelete: () async {
                                 final ok = await showConfirmDialog(
                                   context,
                                   title: 'Delete project?',
-                                  message: 'This removes the project and all steps (including photos).',
+                                  message:
+                                      'This removes the project and all steps (including photos).',
                                 );
                                 if (!ok) return;
-                                await ref.read(projectsControllerProvider.notifier).deleteProject(p);
+                                await ref
+                                    .read(projectsControllerProvider.notifier)
+                                    .deleteProject(p);
                               },
                             );
                           },
@@ -141,6 +177,50 @@ class _ProjectsListScreenState extends ConsumerState<ProjectsListScreen> {
           loading: () => const Center(child: CircularProgressIndicator()),
         ),
       ),
+    );
+  }
+
+  // ---------------------------
+  // IMPORT FLOW (NEW FEATURE)
+  // ---------------------------
+  Future<void> _importProjectFromPhotos(BuildContext context) async {
+    // Name
+    final title = await _promptText(context, 'Import project', 'Imported Project');
+    if (title == null) return;
+
+    // Pick many photos
+    final picker = ImagePicker();
+    final picks = await picker.pickMultiImage(imageQuality: 90);
+    if (picks.isEmpty) return;
+
+    // Create project
+    final projectsCtl = ref.read(projectsControllerProvider.notifier);
+    final project = await projectsCtl.createProject(title);
+
+    // Add each photo as its own step
+    final stepsCtl = ref.read(stepsControllerProvider(project.uid).notifier);
+
+    for (var i = 0; i < picks.length; i++) {
+      final file = File(picks[i].path);
+      final stepNo = (i + 1).toString().padLeft(2, '0');
+
+      await stepsCtl.addStep(
+        project: project,
+        title: 'Step $stepNo',
+        description: '',
+        pickedImage: file,
+      );
+    }
+
+    if (!context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Imported ${picks.length} photos into “${project.title}”.')),
+    );
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => ProjectDetailScreen(project: project)),
     );
   }
 
@@ -168,6 +248,7 @@ class _ProjectsListScreenState extends ConsumerState<ProjectsListScreen> {
 
   Future<String?> _promptText(BuildContext context, String title, String initial) async {
     final controller = TextEditingController(text: initial);
+
     return showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -175,7 +256,9 @@ class _ProjectsListScreenState extends ConsumerState<ProjectsListScreen> {
         content: TextField(
           controller: controller,
           autofocus: true,
+          textInputAction: TextInputAction.done,
           decoration: const InputDecoration(labelText: 'Title'),
+          onSubmitted: (_) => Navigator.pop(ctx, controller.text),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
@@ -191,8 +274,12 @@ class _ProjectsListScreenState extends ConsumerState<ProjectsListScreen> {
 
 class _HeaderSummary extends StatelessWidget {
   final List<Project> projects;
+  final VoidCallback onImport;
 
-  const _HeaderSummary({required this.projects});
+  const _HeaderSummary({
+    required this.projects,
+    required this.onImport,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -228,7 +315,7 @@ class _HeaderSummary extends StatelessWidget {
             ),
           ),
           FilledButton.tonalIcon(
-            onPressed: null, // reserved for “Import” later if you add it
+            onPressed: onImport,
             icon: const Icon(Icons.file_upload_outlined),
             label: const Text('Import'),
           ),
@@ -280,7 +367,7 @@ class _ProjectCard extends StatelessWidget {
           ),
           subtitle: Text('Updated: ${project.updatedAt.toLocal()}'),
           trailing: PopupMenuButton<String>(
-            onSelected: (v) async {
+            onSelected: (v) {
               if (v == 'rename') onRename();
               if (v == 'delete') onDelete();
             },
@@ -349,10 +436,7 @@ class _NothingFound extends StatelessWidget {
             const SizedBox(height: 10),
             Text('No matches', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
-            Text(
-              'Try a different search term.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            Text('Try a different search term.', style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
       ),

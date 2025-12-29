@@ -7,7 +7,7 @@ class ProcessCardsApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = ColorScheme.fromSeed(seedColor: Colors.blue);
+    final scheme = ColorScheme.fromSeed(seedColor: Colors.green);
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
